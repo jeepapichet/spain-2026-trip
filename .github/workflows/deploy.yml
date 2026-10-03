@@ -1,0 +1,65 @@
+# Deploys the password-protected report to GitHub Pages.
+# From EXPIRES_ON (Bangkok time) onward, it deploys an "expired" page instead
+# and deletes the encrypted report from the main branch.
+name: Deploy report (auto-expires)
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "5 17 * * *" # daily at 00:05 Asia/Bangkok
+  workflow_dispatch:
+
+env:
+  EXPIRES_ON: "2026-10-10"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Build site (report or expired page)
+        id: build
+        run: |
+          today=$(TZ=Asia/Bangkok date +%F)
+          mkdir -p _site
+          if [[ "$today" < "$EXPIRES_ON" ]] && [[ -f index.html ]]; then
+            echo "Active until $EXPIRES_ON (today $today)"
+            cp index.html _site/index.html
+            echo "expired=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Expired (today $today)"
+            cp expired.html _site/index.html
+            echo "expired=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/configure-pages@v6.0.0
+      - uses: actions/upload-pages-artifact@v5.0.0
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v5.0.1
+
+      - name: Remove encrypted report from main after expiry
+        if: steps.build.outputs.expired == 'true'
+        run: |
+          if [[ -f index.html ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898333+github-actions[bot]@users.noreply.github.com"
+            git rm -q index.html
+            git commit -m "Report expired on $EXPIRES_ON"
+            git push
+          fi
